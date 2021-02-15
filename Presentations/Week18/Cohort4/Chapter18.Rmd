@@ -1,0 +1,285 @@
+---
+title: "Advanced R"
+subtitle: "Chapter 18: Expressions"
+author: "Roberto Villegas-Diaz (GH/villegar)"
+date: 2021-02-15
+output:
+  xaringan::moon_reader:
+    nature:
+      highlightLines: true
+      beforeInit: macros.js
+    lib_dir: libs
+    css: xaringan-themer.css
+    includes:
+      after_body: insert-logo.html
+---
+
+
+```{r xaringan-themer, include = FALSE}
+xaringanthemer::style_mono_light(
+  base_color = "#3092FF",
+  header_font_google = xaringanthemer::google_font("Josefin Sans"),
+  text_font_google   = xaringanthemer::google_font("Montserrat", "300", "300i"),
+  code_font_google   = xaringanthemer::google_font("Droid Mono")
+)
+
+knitr::opts_chunk$set(
+  eval = FALSE
+)
+```
+
+## 18.1 Introduction
+
+- Operation vs result
+```{r, eval = TRUE, error = TRUE}
+y <- x * 10
+```
+--
+
+```{r, eval = TRUE}
+z <- rlang::expr(y <- x * 10)
+```
+
+--
+```{r, eval = TRUE}
+x <- 4
+eval(z)
+y
+```
+
+.footnote[__Prerequisites:__ `rlang` and `lobstr`.]
+
+---
+
+## 18.2 Abstract syntax trees
+
+.pull-left[
+![:scale 80%](https://d33wubrfki0l68.cloudfront.net/d50d61f9b2b8d935a45fd91ea142c7c0a29d5d23/525f5/diagrams/expressions/simple.png)
+]
+
+.pull-right[
+![:scale 100%](https://d33wubrfki0l68.cloudfront.net/9e269a7eb3509ae2e9f3fa9583ff2195b947cc53/d5886/diagrams/expressions/complicated.png)
+]
+
+Vocabulary:
+
+- leaves (e.g. symbols and constants)
+- branches (e.g. function calls)
+
+---
+
+## 18.2 Abstract syntax trees (2)
+
+> Every call in R can be written in tree form ...
+
+```{r}
+y <- x * 10
+`<-`(y, `*`(x, 10))
+```
+
+Both expressions have the following AST:
+
+.center[
+![:scale 50%](https://d33wubrfki0l68.cloudfront.net/e32631051094207bc971e4352744db7ba6f8aac1/6f551/diagrams/expressions/prefix.png)
+]
+
+---
+
+## 18.3 Expressions
+
+> An __expression__ is any member of the set of base types created by parsing code: constants, scalars, symbols, call objects, and pairlists.
+
+
+<!-- __Components:__ -->
+
+.footnote[⚠️ In base R, the objects returned by `expression()` and `parse()` are also documented as "expression".]
+
+---
+
+## 18.3 Expressions (2)
+
+#### Constants
+
+Test for a constant with `rlang::is_syntactic_literal()`
+
+```{r, eval = TRUE}
+rlang::is_syntactic_literal(x)
+rlang::is_syntactic_literal("x")
+rlang::is_syntactic_literal(TRUE)
+rlang::is_syntactic_literal(2L)
+```
+
+---
+
+## 18.3 Expressions (3)
+
+#### Symbols 
+
+Name of objects (e.g. `x`, `mtcars`)
+
+* Capture reference with `rlang::expr()`
+* Turn a string into a symbol `rlang::sym()`
+> Turn back with `as.character` or `rlang::as_string()`.
+
+.pull-left[ 
+```{r, eval = TRUE}
+rlang::expr(x)
+rlang::sym("x")
+```
+]
+
+.pull-right[
+```{r, eval = TRUE}
+rlang::as_string(rlang::sym("x"))
+is.symbol(rlang::expr(x))
+```
+]
+.footnote[⚠️ To convert multiple symbols, `rlang::syms`.]
+
+---
+
+## 18.3 Expressions (4)
+
+#### Calls
+
+A captured function call (branches in the AST).
+
+.pull-left[
+```{r, eval = TRUE}
+x <- rlang::expr(read.table("important.csv", row.names = FALSE))
+typeof(x)
+is.call(x)
+```
+]
+
+--
+
+.pull-right[
+```{r, eval = TRUE}
+x[[1]]
+as.list(x[-1])
+```
+]
+
+---
+
+## 18.3 Expressions (5)
+
+#### Function position
+
+First element of the call object.
+
+```{r}
+pkg::foo(1)
+obj$foo(1)
+foo(1)(2)
+```
+.center[
+![:scale 70%](https://d33wubrfki0l68.cloudfront.net/eeebd597fd7b0c27d70a1bac4390563763999b78/9f1eb/diagrams/expressions/call-call.png)
+]
+
+
+---
+
+## 18.3 Expressions (6)
+
+To construct a call object
+
+```{r, eval = TRUE}
+rlang::call2("mean", x = rlang::expr(x), na.rm = TRUE)
+rlang::call2(rlang::expr(base::mean), x = rlang::expr(x), na.rm = TRUE)
+```
+
+---
+
+## 18.4 Parsing and grammar
+
+> How this string `"x + y"`, becomes an expression?
+
+--
+
+By __parsing__ (fancy term for break into pieces, _tokens_, and "match" to a template, __grammar__).
+
+--
+
+Keep in mind the __operator precedence__.
+
+--
+
+`1 + 2 * 3` -> `1 + (2 * 3)` ---- NO `(1 + 2) * 3`
+
+```{r, eval = TRUE}
+lobstr::ast(1 + 2 * 3)
+```
+
+.footnote[⚠️ Watch out when using `!`.]
+
+---
+
+## 18.4 Parsing and grammar (2)
+
+> Most operators are __left-associative__
+
+```{r, eval = TRUE}
+lobstr::ast(1 + 2 + 3)
+```
+
+--
+
+Two exceptions:
+
+.pull-left[
+```{r, eval = TRUE}
+lobstr::ast(2^2^3)
+```
+]
+
+.pull-right[
+```{r, eval = TRUE}
+lobstr::ast(x <- y <- z)
+```
+]
+
+---
+
+## 18.4 Parsing and grammar (3)
+
+.pull-left[
+To parse code from a string:
+
+```{r, eval = TRUE}
+x1 <- "y <- x + 10"
+x1
+is.call(x1)
+
+x2 <- rlang::parse_expr(x1)
+x2
+is.call(x2)
+```
+]
+
+--
+
+.pull-right[
+Expression to string, __deparsing__
+
+```{r, eval = TRUE}
+z <- rlang::expr(y <- x + 10)
+rlang::expr_text(z)
+```
+]
+
+---
+
+## Homework
+Read sections 18.5 and 18.6, submit a report to D2L.
+<!-- --- -->
+<!-- class:: inverse, center, middle -->
+
+<!-- # Demo -->
+
+---
+
+class: inverse, center, middle
+
+# The End!
