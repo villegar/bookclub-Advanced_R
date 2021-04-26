@@ -1,0 +1,552 @@
+---
+title: "Advanced R"
+subtitle: "Chapter 25: Rewriting R code in C++"
+author: "Roberto Villegas-Diaz (GH/villegar)"
+date: 2021-04-26
+output:
+  xaringan::moon_reader:
+    nature:
+      highlightLines: true
+      beforeInit: macros.js
+    lib_dir: libs
+    css: xaringan-themer.css
+    includes:
+      after_body: insert-logo.html
+---
+
+
+```{r xaringan-themer, include = FALSE}
+xaringanthemer::style_mono_light(
+  base_color = "#3092FF",
+  header_font_google = xaringanthemer::google_font("Josefin Sans"),
+  text_font_google   = xaringanthemer::google_font("Montserrat", "300", "300i"),
+  code_font_google   = xaringanthemer::google_font("Droid Mono")
+)
+
+knitr::opts_chunk$set(
+  eval = FALSE
+)
+```
+
+## 25.1 Introduction
+
+> Rcpp provides a clean, approachable API that lets you write high-performance code, insulated from R’s complex C API.
+
+--
+
+Typical bottlenecks that C++ can address include:
+
+- Loops that can’t be easily vectorised.
+
+- Recursive functions, or problems which involve calling functions millions of times. The overhead of calling a function in C++ is much lower than in R.
+
+- Problems that require advanced data structures and algorithms that R doesn’t provide.
+
+--
+
+### Prerequisites:
+
+1. The package `Rcpp`
+2. A working C++ compiler
+
+```{r, eval = TRUE, echo = TRUE}
+library(Rcpp)
+```
+
+---
+
+## 25.2 Getting started with C++
+
+```{r, eval = TRUE}
+cppFunction('int add(int x, int y, int z) {
+  int sum = x + y + z;
+  return sum;
+}')
+# add works like a regular R function
+add
+add(1, 2, 3)
+```
+
+---
+
+### 25.2.1 No inputs, scalar output
+
+```{r}
+one <- function() 1L
+```
+
+```{r}
+cppFunction('int one() {
+  return 1;
+}')
+```
+
+--
+
+#### Key points:
+
+- Output should be declared when the function is created.
+> For functions that are call only by their side effect, use `void`.
+
+- Return type must be explicitly declared using the key word `return`.
+
+- Every statement ends with `;`.
+
+---
+
+### 25.2.2 Scalar input, scalar output
+
+.pull-left[
+```{r}
+signR <- function(x) {
+  if (x > 0) {
+    1
+  } else if (x == 0) {
+    0
+  } else {
+    -1
+  }
+}
+```
+]
+
+.pull-right[
+```{r}
+cppFunction('int signC(int x) {
+  if (x > 0) {
+    return 1;
+  } else if (x == 0) {
+    return 0;
+  } else {
+    return -1;
+  }
+}')
+```
+]
+
+--
+
+#### Key points:
+
+- We declare the type of each input in the same way we declare the type of the output.
+
+- The `if` syntax is identical.
+
+---
+
+### 25.2.3 Vector input, scalar output
+
+> the cost of loops is much lower in C++.
+
+.pull-left[
+```{r}
+sumR <- function(x) {
+  total <- 0
+  for (i in seq_along(x)) {
+    total <- total + x[i]
+  }
+  total
+}
+```
+]
+
+.pull-right[
+```{r}
+cppFunction(
+'double sumC(NumericVector x) {
+  int n = x.size();
+  double total = 0;
+  for(int i = 0; i < n; ++i) {
+    total += x[i];
+  }
+  return total;
+}')
+```
+]
+
+--
+
+#### Key points:
+
+- Note the different parts of the `for` loop: 
+```{cpp}
+for(init; check; increment)
+```
+
+- __IN C++, VECTOR INDICES START AT 0!__
+
+- C++ provides operators that modify in-place: `total += x[i]` is equivalent to `total = total + x[i]`. Similar in-place operators are `-=`, `*=`, and `/=`.
+
+---
+
+### 25.2.4 Vector input, vector output
+
+..pull-left[
+```{r}
+pdistR <- function(x, ys) {
+  sqrt((x - ys) ^ 2)
+}
+```
+]
+
+.pull-right[
+```{r}
+cppFunction(
+'NumericVector pdistC(double x, 
+              NumericVector ys) {
+  int n = ys.size();
+  NumericVector out(n);
+
+  for(int i = 0; i < n; ++i) {
+    out[i] = sqrt(pow(ys[i] - x, 2.0));
+  }
+  return out;
+}')
+```
+]
+
+--
+
+#### Key points:
+
+- Another useful way of making a vector is to copy an existing one: `NumericVector zs = clone(ys)`.
+- C++ uses `pow()`, not `^`, for exponentiation.
+
+---
+
+### 25.2.5 Using sourceCpp
+
+Source stand-alone C++ files with `sourceCpp()`.
+
+The file should have the extension `.cpp`, and needs to start with:
+
+```{cpp}
+#include <Rcpp.h>
+using namespace Rcpp;
+```
+
+--
+
+And for each function that you want available within R, you need to prefix it with:
+
+```{cpp}
+// [[Rcpp::export]]
+```
+
+--
+You can embed R code in special C++ comment blocks. This is really convenient if you want to run some test code:
+
+```{cpp}
+/*** R
+# This is R code
+*/
+```
+
+--
+To compile the C++ code, use `sourceCpp("path/to/file.cpp")`.
+
+
+---
+
+### 25.2.5 Using sourceCpp (2)
+
+```{cpp}
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+double meanC(NumericVector x) {
+  int n = x.size();
+  double total = 0;
+
+  for(int i = 0; i < n; ++i) {
+    total += x[i];
+  }
+  return total / n;
+}
+
+/*** R
+x <- runif(1e5)
+bench::mark(
+  mean(x),
+  meanC(x)
+)
+*/
+```
+
+---
+
+## 25.3 Other classes
+### 25.3.1 Lists and data frames
+```{cpp}
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+double mpe(List mod) {
+  if (!mod.inherits("lm")) stop("Input must be a linear model");
+
+  NumericVector resid = as<NumericVector>(mod["residuals"]);
+  NumericVector fitted = as<NumericVector>(mod["fitted.values"]);
+
+  int n = resid.size();
+  double err = 0;
+  for(int i = 0; i < n; ++i) {
+    err += resid[i] / (fitted[i] + resid[i]);
+  }
+  return err / n;
+}
+```
+
+```{r}
+mod <- lm(mpg ~ wt, data = mtcars)
+mpe(mod)
+```
+
+---
+
+### 25.3.2 Functions
+
+```{cpp}
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+RObject callWithOne(Function f) {
+  return f(1);
+}
+```
+
+> Note the return type, `RObject`.
+
+```{r}
+callWithOne(function(x) x + 1)
+#> [1] 2
+callWithOne(paste)
+#> [1] "1"
+```
+
+--
+
+Calling R functions with positional arguments is obvious:
+```{cpp}
+f("y", 1);
+```
+
+But you need a special syntax for named arguments:
+```{cpp}
+f(_["x"] = "y", _["value"] = 1);
+```
+
+---
+
+### 25.3.3 Attributes
+
+```{cpp}
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+NumericVector attribs() {
+  NumericVector out = NumericVector::create(1, 2, 3);
+
+  out.names() = CharacterVector::create("a", "b", "c");
+  out.attr("my-attr") = "my-value";
+  out.attr("class") = "my-class";
+
+  return out;
+}
+```
+
+--
+
+> Note the use of `::create()`, a class method. This allows you to create an R vector from C++ scalar values.
+
+---
+
+## 25.4 Missing values
+
+If you’re working with missing values, you need to know two things:
+
+- How R’s missing values behave in C++’s scalars (e.g., double).
+- How to get and set missing values in vectors (e.g., NumericVector).
+
+--
+
+### 25.4.1 Scalars
+
+> missing values are stored as the smallest integer.
+
+--
+
+### 25.4.2 Doubles
+
+> any logical expression that involves a NaN always evaluates as `FALSE`
+
+---
+
+## 25.5 Standard Template Library
+### 25.5.1 Using iterators
+
+Iterators have three main operators:
+
+- Advance with `++`.
+- Get the value they refer to, or __dereference__, with `*`.
+- Compare with `==`.
+
+--
+
+```{cpp}
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+double sum3(NumericVector x) {
+  double total = 0;
+  
+  NumericVector::iterator it;
+  for(it = x.begin(); it != x.end(); ++it) {
+    total += *it;
+  }
+  return total;
+}
+```
+
+--
+
+To obtain the index: `it - x.begin()`
+
+---
+
+### 25.5.1 Using iterators (2)
+
+.pull-left[
+```{cpp}
+// [[Rcpp::plugins(cpp11)]]
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+double sum4(NumericVector xs) {
+  double total = 0;
+  
+  for(const auto &x : xs) {
+    total += x;
+  }
+  return total;
+}
+```
+]
+
+--
+
+.pull-right[
+```{cpp}
+// [[Rcpp::plugins(cpp11)]]
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+double sum4(NumericVector xs) {
+  double total = 0;
+  NumericVector::iterator x;
+  for(x = v.begin(); x != v.end(); ++x) {
+    sum += *x;
+  }
+  return total;
+}
+```
+]
+
+--
+
+```{cpp}
+#include <numeric>
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+double sum5(NumericVector x) {
+  return std::accumulate(x.begin(), x.end(), 0.0);
+}
+```
+
+---
+
+### 25.5.2 Algorithms
+
+__Benefits:__ efficiency, correctness, and maintainability.
+
+--
+
+```{cpp, eval = FALSE}
+#include <algorithm>
+#include <Rcpp.h>
+using namespace Rcpp;
+
+// [[Rcpp::export]]
+IntegerVector findInterval2(NumericVector x, NumericVector breaks) {
+  IntegerVector out(x.size());
+
+  NumericVector::iterator it, pos;
+  IntegerVector::iterator out_it;
+
+  for(it = x.begin(), out_it = out.begin(); it != x.end(); 
+      ++it, ++out_it) {
+    pos = std::upper_bound(breaks.begin(), breaks.end(), *it);
+    *out_it = std::distance(breaks.begin(), pos);
+  }
+
+  return out;
+}
+```
+
+--
+
+__Reference:__ https://en.cppreference.com/w/cpp/algorithm
+
+---
+
+### 25.5.3 Data structures
+
+Some of the datasets provided by STL are:
+
+`array`, `bitset`, `list`, `forward_list`, `map`, `multimap`, `multiset`, `priority_queue`, `queue`, `deque`, `set`, `stack`, `unordered_map`, `unordered_set`, `unordered_multimap`, `unordered_multiset`, and `vector`.
+
+
+---
+
+## 25.6 Case studies
+
+.center[
+![](https://www.memesmonkey.com/images/memesmonkey/39/3993b1ed32dc3831027fd3cd35bb2a1c.jpeg)
+]
+
+---
+
+## 25.7 Using Rcpp in a package
+
+Benefits:
+
+1. Your code can be made available to users without C++ development tools.
+
+2. Multiple source files and their dependencies are handled automatically by the R package build system.
+
+3. Packages provide additional infrastructure for testing, documentation, and consistency.
+
+--
+
+The easiest way to set this up automatically is to call `usethis::use_rcpp()`
+
+---
+
+class:inverse, center
+background-image: url("https://media.makeameme.org/created/yay-we-did-5c4841.jpg")
+background-position: center
+background-size: contain
+
+---
+
+class: inverse, center, middle
+
+# The End!
